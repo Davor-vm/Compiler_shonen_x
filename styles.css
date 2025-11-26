@@ -89,6 +89,25 @@ button {
   /* importante para que grid hijos puedan hacer overflow */
   overflow: hidden;
   /* evita que el body tenga scroll; el scroll queda adentro de editor/side */
+
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 1rem;
+}
+
+#editor {
+  flex: 1;
+  height: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 1rem;
+  line-height: 1;
+  background: transparent;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 1rem;
+  overflow: auto;
+  /* el scroll vive aquí */
 }
 
 .editor-wrap {
@@ -108,7 +127,7 @@ button {
 .line-numbers {
   background: #101a33;
   color: var(--muted);
-  padding: 1rem .5rem;
+  padding: 1rem;
   text-align: right;
   user-select: none;
   min-width: 3ch;
@@ -123,7 +142,7 @@ button {
   outline: none;
   resize: none;
   padding: 1rem;
-  line-height: 1.5;
+  line-height: 1.2;
   background: transparent;
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
