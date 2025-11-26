@@ -1,0 +1,183 @@
+:root {
+  --bg: #0f172a;
+  --panel: #0b1220;
+  --text: #e5e7eb;
+  --muted: #94a3b8;
+  --border: #1f2937;
+  --accent: #22d3ee;
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --err: #ef4444;
+}
+
+* {
+  box-sizing: border-box
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu
+}
+
+/* NEW: full-height grid layout so header / main / footer no se monten */
+body {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 100vh;
+}
+
+button {
+  font: inherit
+}
+
+.toolbar {
+  display: flex;
+  gap: .6rem;
+  align-items: center;
+  padding: .6rem .8rem;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: linear-gradient(180deg, #0b1220, #0b1220cc);
+  backdrop-filter: saturate(150%) blur(6px);
+}
+
+.brand {
+  font-weight: 800;
+  letter-spacing: .5px;
+  margin-right: auto
+}
+
+.btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: .6rem;
+  padding: .45rem .7rem;
+  cursor: pointer;
+  transition: background .2s, transform .05s;
+}
+
+.btn:hover {
+  background: #141b2f
+}
+
+.btn:active {
+  transform: translateY(1px)
+}
+
+.filename {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  padding: .35rem .5rem;
+  color: var(--text);
+  min-width: 180px;
+}
+
+/* NEW: main ahora ocupa el 1fr del body grid; sin calc(). */
+.main {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  min-height: 0;
+  /* importante para que grid hijos puedan hacer overflow */
+  overflow: hidden;
+  /* evita que el body tenga scroll; el scroll queda adentro de editor/side */
+}
+
+.editor-wrap {
+  min-height: 0;
+  height: 100%
+}
+
+.editor-container {
+  display: flex;
+  height: 100%;
+  background: #0e1629;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  /* contenedor sin scroll, delega a hijos */
+}
+
+.line-numbers {
+  background: #101a33;
+  color: var(--muted);
+  padding: 1rem .5rem;
+  text-align: right;
+  user-select: none;
+  min-width: 3ch;
+  white-space: pre;
+  overflow: hidden;
+}
+
+#editor {
+  flex: 1;
+  height: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 1rem;
+  line-height: 1.5;
+  background: transparent;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  overflow: auto;
+  /* el scroll vive aquí */
+}
+
+.side {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  min-height: 0;
+  /* necesario para que la lista haga overflow */
+}
+
+.side h3 {
+  margin: 0;
+  padding: .6rem .8rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted)
+}
+
+.messages {
+  padding: .8rem;
+  overflow: auto
+}
+
+.msg {
+  background: #0f1a33;
+  border-left: 3px solid var(--warn);
+  padding: .5rem .6rem;
+  border-radius: .4rem;
+  margin-bottom: .5rem;
+  white-space: pre-wrap
+}
+
+.msg.ok {
+  border-color: var(--ok)
+}
+
+.msg.err {
+  border-color: var(--err)
+}
+
+.msg.warn {
+  border-color: var(--warn)
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: .45rem .8rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted)
+}

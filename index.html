@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Compiler UI (Vanilla) — Editor con líneas</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand">Compiler UI</div>
+      <button id="openBtn" class="btn">Abrir archivo</button>
+      <input id="fileInput" type="file" accept=".txt,.sx,.code,.src,.*" hidden />
+      <button id="saveBtn" class="btn">Guardar</button>
+      <button id="newBtn" class="btn">Nuevo</button>
+      <input id="filename" class="filename" value="untitled.sx" title="Nombre de archivo" />
+    </header>
+
+    <main class="main">
+      <section class="editor-wrap">
+        <div class="editor-container">
+          <div id="lineNumbers" class="line-numbers"></div>
+          <textarea id="editor" spellcheck="false"></textarea>
+        </div>
+      </section>
+      <aside class="side">
+        <h3>Mensajes</h3>
+        <div id="messages" class="messages">
+          <div class="msg">Sin mensajes.</div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <span id="status">Listo</span>
+      <span id="meta">0 líneas</span>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
