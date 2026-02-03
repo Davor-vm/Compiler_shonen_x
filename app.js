@@ -1,12 +1,13 @@
 (() => {
   const qs = (s) => document.querySelector(s);
 
+  // Elementos del DOM
   const editor = qs('#editor');
   const fileInput = qs('#fileInput');
   const openBtn = qs('#openBtn');
   const saveBtn = qs('#saveBtn');
   const newBtn = qs('#newBtn');
-  const compileBtn = qs('#compileBtn');
+  const compileBtn = qs('#compileBtn'); // Ahora es "Ejecutar"
   const filenameEl = qs('#filename');
   const messages = qs('#messages');
   const statusEl = qs('#status');
@@ -18,6 +19,7 @@
     window.open("Especificaciones_lenguaje_ShonenX.pdf", "_blank");
   });
 
+  // --- UI HELPERS ---
   const setStatus = (text) => statusEl.textContent = text;
   const setMessages = (list) => {
     messages.innerHTML = '';
@@ -43,6 +45,10 @@
     lineNumbers.scrollTop = editor.scrollTop;
   });
 
+  editor.addEventListener('input', updateLineNumbers);
+  updateLineNumbers();
+
+  // --- MANEJO DE ARCHIVOS ---
   openBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', (e) => {
     const file = e.target.files && e.target.files[0];
@@ -77,367 +83,461 @@
     setStatus('Listo');
   });
 
-  editor.addEventListener('input', updateLineNumbers);
-  updateLineNumbers();
 
-  // Helpers de tipo
-  const isIntegerLiteral = (s) => /^[0-9]+$/.test(s);
-  const isDecimalLiteral = (s) => /^[0-9]+\.[0-9]+$/.test(s);
-  const isStringLiteral = (s) => /^"[^"]*"$/.test(s) || /^'[^']*'$/.test(s);
-  const isCharLiteral = (s) => /^'[^']'$/.test(s);
-  const isSpiritLiteral = (s) => /^(0|1)$/.test(s);
-  const isIdentifier = (s) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+  // ==========================================
+  //     COMPILADOR E INTÉRPRETE SHONEN X
+  // ==========================================
 
-  // Determina el tipo de una expresión simple (literal o variable)
-  const exprTypeOf = (token, declaredTypes) => {
-    token = token.trim();
-    if (isStringLiteral(token)) return 'SOUL';
-    if (isCharLiteral(token)) return 'SYMBOL';
-    if (isDecimalLiteral(token)) return 'MANA';
-    if (isIntegerLiteral(token)) {
-      // could be SPIRIT or POWER depending on target - caller should check SPIRIT range
-      return 'POWER';
-    }
-    if (isIdentifier(token)) {
-      return declaredTypes[token] || null;
-    }
-    return null;
+  // Definición de Operadores ShonenX [cite: 12, 13]
+  const OPS = {
+    'POWERUP': '+', 'DAMAGE': '-', 'FUSION': '*', 'SLICE': '/', // Matemáticos
+    'STRONGER': '>', 'WEAKER': '<', 'EQUALS': '===', 'APART': '!==', 'ABS': '>=', 'ABW': '<=' // Lógicos
   };
 
+  // 1. Analizador Léxico Básico (Helpers)
+  const isDigit = (c) => /[0-9]/.test(c);
+  const isAlpha = (c) => /[a-zA-Z_]/.test(c);
+
+  // Clase para gestionar la memoria (Tabla de Símbolos)
+  class Memory {
+    constructor() {
+      this.vars = {}; // Estructura: { nombre: { type, value } }
+    }
+    
+    declare(name, type) {
+      if (this.vars[name]) throw new Error(`Variable '${name}' ya existe.`);
+      // Valores por defecto según el tipo [cite: 15]
+      let defaultVal = 0;
+      if (type === 'SOUL') defaultVal = "";     // String
+      if (type === 'SYMBOL') defaultVal = '';   // Char
+      if (type === 'SPIRIT') defaultVal = 0;    // Bool (0/1)
+      if (type === 'MANA') defaultVal = 0.0;    // Float
+      
+      this.vars[name] = { type, value: defaultVal };
+    }
+
+    exists(name) { return !!this.vars[name]; }
+    
+    get(name) {
+      if (!this.vars[name]) throw new Error(`Variable '${name}' no definida.`);
+      return this.vars[name].value;
+    }
+
+    getType(name) {
+      if (!this.vars[name]) throw new Error(`Variable '${name}' no definida.`);
+      return this.vars[name].type;
+    }
+
+    set(name, val) {
+      if (!this.vars[name]) throw new Error(`Variable '${name}' no definida.`);
+      // Aquí se podrían agregar validaciones de tipo estrictas (Runtime Checks)
+      this.vars[name].value = val;
+    }
+  }
+
+  // Función principal de Compilación
   compileBtn.addEventListener('click', () => {
-    const raw = editor.value;
-    const lines = raw.split(/\r?\n/);
+    const rawCode = editor.value;
+    const lines = rawCode.split(/\r?\n/);
+    const consoleOutput = []; // Aquí guardaremos los "SHOW"
+    const errors = [];
 
-    let errors = [];
-    let cleanedLines = [];
-    let declaredVars = new Set();
-    let declaredTypes = {};
-
-    // Block stack: cada entrada { type: 'DURING'|'TOSERVE'|'BLOCK', line: number }
-    let blockStack = [];
-
-    // Track if we've seen OPENING and ENDING
+    // FASE 1: PARSING (Análisis Sintáctico y Generación de Instrucciones)
+    // Convertimos el texto en una lista de objetos "instrucción"
+    let instructions = [];
+    let blockStack = []; // Para controlar anidamiento de { }
     let insideOpening = false;
-    let foundEnding = false;
 
-    // Iterate with ability to peek next non-comment line (for cases like DURING ... \n { )
-    const peekNextNonCommentIndex = (start) => {
-      for (let j = start + 1; j < lines.length; j++) {
-        const t = lines[j].trim();
-        if (t === '' || t.startsWith('//')) continue;
-        return j;
-      }
-      return -1;
-    };
+    try {
+      for (let i = 0; i < lines.length; i++) {
+        const lineNum = i + 1;
+        let line = lines[i].trim();
+        if (!line || line.startsWith('//')) continue; // Ignorar vacíos y comentarios
 
-    for (let i = 0; i < lines.length; i++) {
-      const rawLine = lines[i];
-      let line = rawLine.trim();
-
-      if (line.startsWith('//')) continue; // comentarios eliminados
-
-      if (line === '') continue; // saltar líneas vacías (no las agregamos al output)
-
-      cleanedLines.push(line);
-
-      // OPENING
-      if (/^OPENING(\s*{)?$/.test(line)) {
-        if (insideOpening) {
-          errors.push({ line: i + 1, text: line, message: 'Doble OPENING no permitido' });
-        }
-        insideOpening = true;
-        continue;
-      }
-
-      // ENDING
-      if (/^(}\s*)?ENDING$/.test(line)) {
-        foundEnding = true;
-        insideOpening = false;
-        // Si hay bloques abiertos -> error de bloque no cerrado
-        if (blockStack.length > 0) {
-          const b = blockStack[blockStack.length - 1];
-          errors.push({ line: i + 1, text: line, message: `Bloque '${b.type}' abierto en línea ${b.line} no fue cerrado antes de ENDING` });
-        }
-        continue;
-      }
-
-      // Si no hemos abierto OPENING -> error por código fuera de sección
-      if (!insideOpening) {
-        errors.push({ line: i + 1, text: line, message: 'Código fuera de OPENING' });
-        continue;
-      }
-
-      // Llave de cierre sola
-      if (line === '}') {
-        if (blockStack.length === 0) {
-          errors.push({ line: i + 1, text: line, message: "Llave '}' fuera de bloque" });
-        } else {
-          blockStack.pop();
-        }
-        continue;
-      }
-
-      // Llave de apertura sola
-      if (line === '{') {
-        // apertura genérica de bloque (podría ser usada por otros)
-        blockStack.push({ type: 'BLOCK', line: i + 1 });
-        continue;
-      }
-
-      // SUMMON -> declarar variable y tipo
-      let mSummon = line.match(/^SUMMON\s+(POWER|MANA|SYMBOL|SOUL|SPIRIT)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;$/);
-      if (mSummon) {
-        const type = mSummon[1];
-        const name = mSummon[2];
-        if (declaredVars.has(name)) {
-          errors.push({ line: i + 1, text: line, message: `Variable '${name}' ya declarada` });
-        } else {
-          declaredVars.add(name);
-          declaredTypes[name] = type;
-        }
-        continue;
-      }
-
-      // DURING ... {   OR DURING ...   (then next line must be {)
-      let mDuring = line.match(/^DURING\s+(.+)$/);
-      if (mDuring) {
-        // Check if it ends with '{'
-        if (line.endsWith('{')) {
-          blockStack.push({ type: 'DURING', line: i + 1 });
-        } else {
-          // peek next non-comment non-empty
-          const nxt = peekNextNonCommentIndex(i);
-          if (nxt === -1 || lines[nxt].trim() !== '{') {
-            errors.push({ line: i + 1, text: line, message: "Se esperaba '{' después de instrucción DURING" });
-          } else {
-            // consume will be handled when we reach that line; but push block now to record start
-            blockStack.push({ type: 'DURING', line: i + 1 });
-          }
-        }
-        // validate condition inside DURING (simple syntactic check) — must be like: <var> <OP_LOG> <var|const>
-        const cond = mDuring[1].trim();
-        // basic condition pattern: identifier OP identifier|literal
-        if (!/^[A-Za-z_][A-Za-z0-9_]*\s+(EQUALS|APART|STRONGER|WEAKER|ABS|ABW)\s+(.+)$/.test(cond)) {
-          errors.push({ line: i + 1, text: line, message: "Condición DURING inválida" });
-        } else {
-          // if var used in condition exists?
-          const condVarMatch = cond.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+(EQUALS|APART|STRONGER|WEAKER|ABS|ABW)\s+(.+)$/);
-          if (condVarMatch) {
-            const left = condVarMatch[1];
-            const right = condVarMatch[3].trim();
-            if (!declaredVars.has(left)) {
-              errors.push({ line: i + 1, text: line, message: `Variable '${left}' en condición DURING no declarada` });
-            } else {
-              // if right is identifier, must be declared
-              if (isIdentifier(right) && !declaredVars.has(right)) {
-                errors.push({ line: i + 1, text: line, message: `Operando '${right}' en condición DURING no declarado` });
-              }
-            }
-          }
-        }
-        continue;
-      }
-
-      // TOSERVE <...> UNTIL <...> <var> GROWS|SHRINKS {?
-      let mToserve = line.match(/^TOSERVE\s+(.+)$/);
-      if (mToserve) {
-        // enforce presence of UNTIL and final GROWS|SHRINKS
-        const body = mToserve[1];
-        // check for trailing '{' or next line '{'
-        if (line.endsWith('{')) {
-          blockStack.push({ type: 'TOSERVE', line: i + 1 });
-        } else {
-          const nxt = peekNextNonCommentIndex(i);
-          if (nxt === -1 || lines[nxt].trim() !== '{') {
-            errors.push({ line: i + 1, text: line, message: "Se esperaba '{' después de instrucción TOSERVE" });
-          } else {
-            blockStack.push({ type: 'TOSERVE', line: i + 1 });
-          }
-        }
-        // basic validation of structure (presence of UNTIL and final GROWS/SHRINKS)
-        if (!/\bUNTIL\b/.test(body) || !/(GROWS|SHRINKS)\s*$/.test(body)) {
-          errors.push({ line: i + 1, text: line, message: "Estructura TOSERVE inválida (se requiere UNTIL ... GROWS|SHRINKS)" });
-        } else {
-          // check variable in the clause exists (roughly)
-          const varMatch = body.match(/([A-Za-z_][A-Za-z0-9_]*)\s+(GROWS|SHRINKS)\s*$/);
-          if (varMatch && !declaredVars.has(varMatch[1])) {
-            errors.push({ line: i + 1, text: line, message: `Variable '${varMatch[1]}' en TOSERVE no declarada` });
-          }
-        }
-        continue;
-      }
-
-      // READ validation
-      let mRead = line.match(/^READ\s+"([^"]*)"\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*;$/);
-      if (mRead) {
-        const varName = mRead[2];
-        if (!declaredVars.has(varName)) {
-          errors.push({ line: i + 1, text: line, message: `Variable '${varName}' en READ no declarada` });
-        }
-        continue;
-      }
-      if (/^READ\s+/.test(line)) {
-        errors.push({ line: i + 1, text: line, message: 'READ mal formado' });
-        continue;
-      }
-
-      // SHOW validation: must be "text" , var ;  OR "text" ;
-      let mShow = line.match(/^SHOW\s+"([^"]*)"(?:\s*,\s*([A-Za-z_][A-Za-z0-9_]*))?\s*;$/);
-      if (mShow) {
-        const varName = mShow[2];
-        if (varName && !declaredVars.has(varName)) {
-          errors.push({ line: i + 1, text: line, message: `Variable '${varName}' en SHOW no declarada` });
-        }
-        continue;
-      }
-      if (/^SHOW\s+/.test(line)) {
-        errors.push({ line: i + 1, text: line, message: 'SHOW mal formado (use SHOW "texto" , var ; )' });
-        continue;
-      }
-
-      // GIVE handling with type checks
-      let mGive = line.match(/^GIVE\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)\s*;$/);
-      if (mGive) {
-        const target = mGive[1];
-        let expr = mGive[2].trim();
-
-        // target must be declared
-        if (!declaredVars.has(target)) {
-          errors.push({ line: i + 1, text: line, message: `Variable '${target}' no declarada` });
+        // --- Estructura OPENING / ENDING [cite: 18] ---
+        if (/^OPENING(\s*{)?$/.test(line)) {
+          if (insideOpening) throw new Error(`Línea ${lineNum}: OPENING duplicado.`);
+          insideOpening = true;
+          instructions.push({ type: 'NOOP', line: lineNum }); 
           continue;
         }
-        const targetType = declaredTypes[target];
+        if (/^(}\s*)?ENDING$/.test(line)) {
+            if (!insideOpening) throw new Error(`Línea ${lineNum}: ENDING sin OPENING.`);
+            insideOpening = false;
+            instructions.push({ type: 'END_PROGRAM', line: lineNum });
+            continue;
+        }
+        if (!insideOpening) {
+           throw new Error(`Línea ${lineNum}: Código fuera del bloque OPENING.`);
+        }
 
-        // Detect operator usage: format could be: operand1 OP operand2 OP operand3 ...
-        // We'll split by operators (POWERUP, DAMAGE, FUSION, SLICE) keeping them
-        const opRegex = /\b(POWERUP|DAMAGE|FUSION|SLICE)\b/;
-        if (opRegex.test(expr)) {
-          // Split tokens by spaces to extract operands and operators
-          const parts = expr.split(/\s+/);
-          // basic parsing: operand op operand [op operand ...]
-          // check operands and operator validity
-          let expectingOperand = true;
-          let operandTypes = [];
-          let opEncountered = false;
-          for (let token of parts) {
-            if (opRegex.test(token)) {
-              expectingOperand = true;
-              opEncountered = true;
-            } else {
-              // token is operand (could be literal or identifier)
-              const ttype = exprTypeOf(token, declaredTypes);
-              if (ttype === null) {
-                errors.push({ line: i + 1, text: line, message: `Operando '${token}' desconocido o literal mal formado` });
-                break;
-              }
-              operandTypes.push(ttype);
-              expectingOperand = false;
-            }
-          }
-          // if any operand type is not POWER/MANA => invalid for math ops
-          for (let ot of operandTypes) {
-            if (!(ot === 'POWER' || ot === 'MANA')) {
-              errors.push({ line: i + 1, text: line, message: `Operador matemático inválido para operando de tipo ${ot}` });
-            }
-          }
-          // determine resulting type: if any MANA => result MANA else POWER
-          const resultType = operandTypes.includes('MANA') ? 'MANA' : 'POWER';
-          if (targetType !== resultType) {
-            errors.push({ line: i + 1, text: line, message: `No se puede asignar resultado ${resultType} a variable '${target}' de tipo ${targetType}` });
-          }
+        // --- Llaves de Bloques { } ---
+        if (line === '{') {
+          instructions.push({ type: 'BLOCK_START', line: lineNum });
           continue;
-        } else {
-          // No math operator: expr should be a single literal or identifier
-          // If identifier -> must be declared and type compatible
-          if (isIdentifier(expr)) {
-            if (!declaredVars.has(expr)) {
-              errors.push({ line: i + 1, text: line, message: `Operando '${expr}' no declarado` });
+        }
+        if (line === '}') {
+          instructions.push({ type: 'BLOCK_END', line: lineNum });
+          continue;
+        }
+
+        // --- Declaración SUMMON [cite: 20] ---
+        let mSummon = line.match(/^SUMMON\s+(POWER|MANA|SYMBOL|SOUL|SPIRIT)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;$/);
+        if (mSummon) {
+          instructions.push({ 
+            type: 'SUMMON', 
+            varType: mSummon[1], 
+            name: mSummon[2], 
+            line: lineNum 
+          });
+          continue;
+        }
+
+        // --- Asignación GIVE [cite: 25] ---
+        // Maneja: GIVE x = 5;  o  GIVE x = y POWERUP 2;
+        let mGive = line.match(/^GIVE\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)\s*;$/);
+        if (mGive) {
+          instructions.push({ 
+            type: 'GIVE', 
+            target: mGive[1], 
+            expression: mGive[2], 
+            line: lineNum 
+          });
+          continue;
+        }
+        // Asignación simple abreviada (común en ejemplos): x <=> 0; o x = 0;
+        // El PDF usa <=> en algunos ejemplos y = en otros. Soportamos ambos.
+        let mAssignSimple = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(?:<=>|=)\s*(.+)\s*;$/);
+        if (mAssignSimple && !line.startsWith("GIVE") && !line.startsWith("BIND") && !line.startsWith("SHOW")) {
+             instructions.push({ 
+                type: 'GIVE', 
+                target: mAssignSimple[1], 
+                expression: mAssignSimple[2], 
+                line: lineNum 
+              });
               continue;
-            }
-            const rhsType = declaredTypes[expr];
-            if (rhsType !== targetType) {
-              // Special case: assigning integer 0/1 to SPIRIT isn't applicable here because rhs is variable
-              errors.push({ line: i + 1, text: line, message: `Tipo ${rhsType} no se puede asignar a variable ${targetType}` });
-            }
-            continue;
-          }
-
-          // literal cases
-          if (isStringLiteral(expr)) {
-            if (targetType !== 'SOUL') {
-              errors.push({ line: i + 1, text: line, message: `Literal string no puede asignarse a variable tipo ${targetType}` });
-            }
-            continue;
-          }
-          if (isCharLiteral(expr)) {
-            if (targetType !== 'SYMBOL') {
-              errors.push({ line: i + 1, text: line, message: `Literal char no puede asignarse a variable tipo ${targetType}` });
-            }
-            continue;
-          }
-          if (isDecimalLiteral(expr)) {
-            if (targetType !== 'MANA') {
-              errors.push({ line: i + 1, text: line, message: `Literal decimal no puede asignarse a variable tipo ${targetType}` });
-            }
-            continue;
-          }
-          if (isIntegerLiteral(expr)) {
-            // integer literal can map to POWER or SPIRIT (if 0/1)
-            if (targetType === 'SPIRIT') {
-              if (!isSpiritLiteral(expr)) {
-                errors.push({ line: i + 1, text: line, message: `SPIRIT solo acepta 0 o 1` });
-              }
-            } else if (targetType !== 'POWER') {
-              errors.push({ line: i + 1, text: line, message: `Literal entero no puede asignarse a variable tipo ${targetType}` });
-            }
-            continue;
-          }
-
-          // nothing matched -> malformed RHS
-          errors.push({ line: i + 1, text: line, message: `Expresión RHS mal formada` });
-          continue;
         }
+
+
+        // --- Salida SHOW [cite: 53] ---
+        let mShow = line.match(/^SHOW\s+(.+)\s*;$/);
+        if (mShow) {
+            // Separa texto y variable si hay coma
+            let content = mShow[1];
+            let parts = content.split(',').map(s => s.trim());
+            instructions.push({ 
+                type: 'SHOW', 
+                parts: parts, 
+                line: lineNum 
+            });
+            continue;
+        }
+
+        // --- Entrada READ [cite: 52] ---
+        let mRead = line.match(/^READ\s+"([^"]*)"\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*;$/);
+        if (mRead) {
+            instructions.push({ 
+                type: 'READ', 
+                prompt: mRead[1], 
+                target: mRead[2], 
+                line: lineNum 
+            });
+            continue;
+        }
+
+        // --- Condicional BIND [cite: 26] ---
+        // BIND cond WORTHY instruction
+        // Nota: Para simplificar, en esta versión purista, asumiremos que WORTHY ejecuta una sola instrucción en la misma línea
+        // o inicia un bloque. El ejemplo del PDF es de una línea.
+        let mBind = line.match(/^BIND\s+(.+)\s+WORTHY\s+(.+)$/);
+        if (mBind) {
+            // Separa la instrucción "WORTHY" (ej: SHOW "Hola")
+            // Parseamos la instrucción interna recursivamente o la guardamos como sub-instrucción
+            // Simplificación: Guardamos el string raw para evaluarlo en tiempo de ejecución
+            instructions.push({
+                type: 'BIND',
+                condition: mBind[1],
+                actionRaw: mBind[2], // Lo que sucede si es verdad
+                line: lineNum
+            });
+            continue;
+        }
+
+        // --- Ciclo DURING (While) [cite: 41] ---
+        let mDuring = line.match(/^DURING\s+(.+)$/);
+        if (mDuring) {
+            instructions.push({ 
+                type: 'DURING', 
+                condition: mDuring[1], 
+                line: lineNum 
+            });
+            continue;
+        }
+
+        // --- Ciclo TOSERVE (For) [cite: 31] ---
+        // --- Ciclo TOSERVE (For) ---
+        // CAMBIO: Ahora generamos 2 instrucciones: Una asignación previa y luego el ciclo
+        let mToserve = line.match(/^TOSERVE\s+(.+)\s+UNTIL\s+(.+)\s+([A-Za-z_]\w*)\s+(GROWS|SHRINKS)$/);
+        if (mToserve) {
+            // Parte 1: Extraer la inicialización (ej: x=1)
+            let initRaw = mToserve[1]; // "x=1"
+            let initParts = initRaw.split('=');
+            
+            if (initParts.length === 2) {
+                // Inyectamos una instrucción GIVE antes del ciclo
+                instructions.push({ 
+                    type: 'GIVE', 
+                    target: initParts[0].trim(), 
+                    expression: initParts[1].trim(), 
+                    line: lineNum 
+                });
+            }
+
+            // Parte 2: El ciclo en sí (solo condición y configuración de iterador)
+            instructions.push({
+                type: 'TOSERVE',
+                condition: mToserve[2],    // ej: x<=10
+                iteratorVar: mToserve[3],  // ej: x
+                iteratorMode: mToserve[4], // GROWS/SHRINKS
+                line: lineNum
+            });
+            continue;
+        }
+
+        throw new Error(`Línea ${lineNum}: Sintaxis no reconocida: "${line}"`);
       }
-
-      // If reached here and none matched -> syntax not recognized
-      errors.push({ line: i + 1, text: line, message: 'Sintaxis no reconocida' });
-    } // end for lines
-
-    // After loop: check for open blocks not closed (if ENDING wasn't present we also flag)
-    if (!foundEnding) {
-      errors.push({ line: lines.length, text: '', message: 'No se encontró ENDING' });
-    }
-    if (blockStack.length > 0) {
-      for (let b of blockStack) {
-        errors.push({ line: b.line, text: '', message: `Bloque '${b.type}' abierto en línea ${b.line} no fue cerrado` });
-      }
-    }
-
-    // Report errors if any
-    if (errors.length > 0) {
-      // collapse errors by line order
-      errors.sort((a, b) => a.line - b.line);
-      setMessages(errors.map(e => ({
-        level: 'error',
-        message: `Línea ${e.line}: ${e.message}` + (e.text ? ` → "${e.text}"` : '')
-      })));
-      setStatus('Errores encontrados ❌');
+    } catch (e) {
+      setMessages([{ level: 'error', message: e.message }]);
+      setStatus('Error de Compilación');
       return;
     }
 
-    // If no errors: produce compact output (remove spaces and comments)
-    // We already removed comments and blank lines; now compact
-    const output = cleanedLines.map(l => l.replace(/\s+/g, "")).join("\n");
+    // FASE 2: EJECUCIÓN (Interpretación)
+    // Aquí es donde "corre" el programa usando el Instruction Pointer (ip)
+    
+    let mem = new Memory();
+    let ip = 0; // Instruction Pointer
+    let outputLog = [];
+    
+    // Helper para evaluar expresiones matemáticas/lógicas ShonenX
+    const evalExpr = (exprStr) => {
+        // 1. Reemplazar variables por sus valores
+        // Tokenizamos por espacios y operadores
+        let tokens = exprStr.split(/(\s+|POWERUP|DAMAGE|FUSION|SLICE|STRONGER|WEAKER|EQUALS|APART|ABS|ABW)/).filter(t => t.trim().length > 0);
+        
+        let jsExpr = "";
+        
+        tokens.forEach(t => {
+            if (OPS[t]) {
+                jsExpr += OPS[t]; // Traducir operador (ej: POWERUP -> +)
+            } else if (/^[A-Za-z_]\w*$/.test(t) && mem.exists(t)) {
+                let val = mem.get(t);
+                // Si es string, poner comillas
+                if (typeof val === 'string') jsExpr += `"${val}"`; 
+                else jsExpr += val;
+            } else {
+                // Literales (números o strings ya entrecomillados)
+                jsExpr += t;
+            }
+        });
 
-    const blob = new Blob([output], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filenameEl.value || 'program_fixed.sx';
-    a.click();
-    URL.revokeObjectURL(url);
+        try {
+            // Nota: En un compilador real escribiríamos un parser de precedencia.
+            // Aquí usamos eval restringido solo para la expresión matemática final convertida a JS puro.
+            return eval(jsExpr); 
+        } catch (err) {
+            throw new Error(`Error evaluando expresión: ${exprStr}`);
+        }
+    };
 
-    setMessages([{ level: 'ok', message: 'Compilación exitosa ✔' }]);
-    setStatus('Código listo ✓');
-  });
+    // Helper para ejecutar una "micro-instrucción" (usado en BIND)
+    const runMicroInstruction = (actionStr) => {
+        // Parser muy básico para la acción del BIND (generalmente es SHOW o una asignación)
+        if (actionStr.trim().startsWith("SHOW")) {
+            let content = actionStr.replace("SHOW", "").trim();
+             // Manejo básico de SHOW en BIND (puede mejorar)
+             // Quitamos punto y coma final si existe
+             if(content.endsWith(';')) content = content.slice(0, -1);
+             
+             let parts = content.split(',').map(s => s.trim());
+             let msg = parts.map(p => {
+                 if (p.startsWith('"') || p.startsWith("'")) return p.slice(1, -1);
+                 if (mem.exists(p)) return mem.get(p);
+                 return p;
+             }).join(" ");
+             outputLog.push(`> ${msg}`);
+        }
+        // Aquí se podrían agregar asignaciones dentro de IFs
+    };
+
+    // BUCLE PRINCIPAL DE EJECUCIÓN
+    let execLimit = 10000; // Evitar bucles infinitos
+    let cycles = 0;
+
+    try {
+        while (ip < instructions.length) {
+            cycles++;
+            if (cycles > execLimit) throw new Error("Stack Overflow: Bucle infinito detectado o programa muy largo.");
+
+            const inst = instructions[ip];
+
+            switch (inst.type) {
+                case 'NOOP': 
+                case 'BLOCK_START':
+                case 'BLOCK_END':
+                    // Los bloques se usan para saltos, por ahora avanzamos
+                    ip++;
+                    break;
+                
+                case 'SUMMON':
+                    mem.declare(inst.name, inst.varType);
+                    ip++;
+                    break;
+
+                case 'GIVE':
+                    let val = evalExpr(inst.expression);
+                    mem.set(inst.target, val);
+                    ip++;
+                    break;
+
+                case 'SHOW':
+                    let msg = inst.parts.map(p => {
+                        // Si es literal string "..."
+                        if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+                            return p.slice(1, -1);
+                        }
+                        // Si es variable
+                        if (mem.exists(p)) return mem.get(p);
+                        return "NULL";
+                    }).join(" ");
+                    outputLog.push(`> ${msg}`);
+                    ip++;
+                    break;
+                
+                case 'READ':
+                    // Usamos prompt del navegador para simular entrada
+                    let inputVal = prompt(inst.prompt.replace(/"/g, ''));
+                    // Intentar convertir a número si aplica
+                    if (!isNaN(inputVal) && inputVal.trim() !== '') {
+                        if (mem.getType(inst.target) === 'POWER' || mem.getType(inst.target) === 'MANA') {
+                            inputVal = Number(inputVal);
+                        }
+                    }
+                    mem.set(inst.target, inputVal);
+                    ip++;
+                    break;
+
+                case 'BIND': // IF
+                    let condResult = evalExpr(inst.condition);
+                    if (condResult) {
+                        runMicroInstruction(inst.actionRaw);
+                    } else {
+                        // Si hubiera ELSE (VILE), iría aquí
+                    }
+                    ip++;
+                    break;
+
+                case 'DURING': 
+                    if (evalExpr(inst.condition)) {
+                        ip++; 
+                    } else {
+                        // Saltar bloque si la condición es falsa
+                        let depth = 0;
+                        let scanner = ip + 1;
+                        // Buscamos el cierre correspondiente
+                        while (scanner < instructions.length) {
+                            if (instructions[scanner].type === 'BLOCK_START') depth++;
+                            if (instructions[scanner].type === 'BLOCK_END') depth--;
+                            
+                            // Si cerramos todos los bloques abiertos, paramos
+                            if (depth === 0 && instructions[scanner].type === 'BLOCK_END') {
+                                scanner++; // Avanzamos uno más para salir del bloque
+                                break;
+                            }
+                            scanner++;
+                        }
+                        ip = scanner; 
+                    }
+                    break;
+
+                case 'TOSERVE': 
+                    if (evalExpr(inst.condition)) {
+                        ip++;
+                    } else {
+                        // Saltar bloque si la condición es falsa (Misma lógica que DURING)
+                        let depth = 0;
+                        let scanner = ip + 1;
+                        while (scanner < instructions.length) {
+                            if (instructions[scanner].type === 'BLOCK_START') depth++;
+                            if (instructions[scanner].type === 'BLOCK_END') depth--;
+                            
+                            if (depth === 0 && instructions[scanner].type === 'BLOCK_END') {
+                                scanner++; 
+                                break;
+                            }
+                            scanner++;
+                        }
+                        ip = scanner;
+                    }
+                    break;
+
+                // Caso especial: Detectar fin de bloque para saltar atrás (Loops)
+                // En una implementación real, el AST tendría punteros. Aquí escaneamos hacia atrás.
+                default:
+                    ip++;
+            }
+            
+            // Lógica de Retorno de Bucle (Backpatching dinámico)
+            // Si acabamos de ejecutar una instrucción que precede a un '}', verificamos si estamos en un bucle
+            if (ip < instructions.length && instructions[ip].type === 'BLOCK_END') {
+                // Mirar hacia atrás para ver quién abrió este bloque
+                let depth = 1;
+                let backScanner = ip - 1;
+                let loopFound = null;
+                
+                while (backScanner >= 0) {
+                    if (instructions[backScanner].type === 'BLOCK_END') depth++;
+                    if (instructions[backScanner].type === 'BLOCK_START') depth--; // Bloque genérico
+                    
+                    // Si encontramos el inicio de un DURING o TOSERVE en el nivel correcto
+                    if (depth === 0) {
+                        if (instructions[backScanner].type === 'DURING') {
+                            loopFound = backScanner;
+                            break;
+                        }
+                        if (instructions[backScanner].type === 'TOSERVE') {
+                            loopFound = backScanner;
+                            // Aplicar incremento (GROWS/SHRINKS)
+                            let loopInst = instructions[backScanner];
+                            let currentVal = mem.get(loopInst.iteratorVar);
+                            if (loopInst.iteratorMode === 'GROWS') mem.set(loopInst.iteratorVar, currentVal + 1);
+                            if (loopInst.iteratorMode === 'SHRINKS') mem.set(loopInst.iteratorVar, currentVal - 1);
+                            break;
+                        }
+                    }
+                    if (depth < 0) break; // Salimos del scope
+                    backScanner--;
+                }
+
+                if (loopFound !== null) {
+                    ip = loopFound; // Saltar de vuelta al inicio del bucle para re-evaluar condición
+                } else {
+                    ip++; // Es un bloque normal (IF o OPENING), seguimos
+                }
+            }
+
+            if (inst.type === 'END_PROGRAM') break;
+        }
+
+        // Éxito
+        setMessages(outputLog.map(m => ({ level: 'ok', message: m })));
+        setStatus('Ejecución completada ✔');
+
+    } catch (runtimeError) {
+        setMessages([{ level: 'error', message: `Error en ejecución: ${runtimeError.message}` }]);
+        setStatus('Error Runtime ❌');
+    }
+
+  }); // Fin compileBtn click
+
 })();
