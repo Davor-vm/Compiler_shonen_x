@@ -2,32 +2,59 @@ export class Parser {
     parse(rawCode) {
         const lines = rawCode.split(/\r?\n/);
         let instructions = [];
+        let errors = []; // <-- AQUÍ guardaremos todos los errores
         let insideOpening = false;
+        let hasEnding = false;
+        let openBlocks = 0; // Para contar llaves { }
 
         for (let i = 0; i < lines.length; i++) {
             const lineNum = i + 1;
             let line = lines[i].trim();
             
+            // 1. Ignorar líneas vacías o comentarios
             if (!line || line.startsWith('//')) continue; 
 
-            // Estructura OPENING / ENDING
+            // 2. Control de OPENING
             if (/^OPENING(\s*{)?$/.test(line)) {
-                if (insideOpening) throw new Error(`Línea ${lineNum}: OPENING duplicado.`);
+                if (insideOpening) {
+                    errors.push(`Línea ${lineNum}: Error - 'OPENING' duplicado.`);
+                }
                 insideOpening = true;
+                if (line.includes('{')) openBlocks++; // Si el opening tiene llave, la contamos
                 instructions.push({ type: 'NOOP', line: lineNum }); 
                 continue;
             }
+
+            // 3. Control de ENDING
             if (/^(}\s*)?ENDING$/.test(line)) {
-                if (!insideOpening) throw new Error(`Línea ${lineNum}: ENDING sin OPENING.`);
-                insideOpening = false;
+                if (!insideOpening) {
+                    errors.push(`Línea ${lineNum}: Error - 'ENDING' encontrado sin un 'OPENING' previo.`);
+                }
+                hasEnding = true;
+                if (line.startsWith('}')) openBlocks--;
                 instructions.push({ type: 'END_PROGRAM', line: lineNum });
                 continue;
             }
-            if (!insideOpening) throw new Error(`Línea ${lineNum}: Código fuera del bloque OPENING.`);
 
-            // Bloques
-            if (line === '{') { instructions.push({ type: 'BLOCK_START', line: lineNum }); continue; }
-            if (line === '}') { instructions.push({ type: 'BLOCK_END', line: lineNum }); continue; }
+            // Si hay código antes del OPENING
+            if (!insideOpening) {
+                errors.push(`Línea ${lineNum}: Error - Código fuera del bloque OPENING.`);
+                continue; // Saltamos al siguiente renglón
+            }
+
+            // 4. Detección de Bloques { }
+            if (line === '{') { 
+                instructions.push({ type: 'BLOCK_START', line: lineNum }); 
+                openBlocks++; 
+                continue; 
+            }
+            if (line === '}') { 
+                instructions.push({ type: 'BLOCK_END', line: lineNum }); 
+                openBlocks--; 
+                continue; 
+            }
+
+            // --- INSTRUCCIONES (Si falla el regex, agregamos error y seguimos) ---
 
             // SUMMON
             let mSummon = line.match(/^SUMMON\s+(POWER|MANA|SYMBOL|SOUL|SPIRIT)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;$/);
@@ -57,30 +84,26 @@ export class Parser {
                 continue;
             }
 
-            // BIND (IF / ELSE) - Optimizado para línea única
+            // BIND (If/Else)
             let mBindVile = line.match(/^BIND\s+(.+?)\s+WORTHY\s+(.+?)\s+VILE\s+(.+);?$/);
             let mBindSimple = line.match(/^BIND\s+(.+?)\s+WORTHY\s+(.+);?$/);
 
             if (mBindVile) {
-                instructions.push({ 
-                    type: 'BIND', condition: mBindVile[1], actionTrue: mBindVile[2], actionFalse: mBindVile[3], line: lineNum 
-                });
+                instructions.push({ type: 'BIND', condition: mBindVile[1], actionTrue: mBindVile[2], actionFalse: mBindVile[3], line: lineNum });
                 continue;
             } else if (mBindSimple) {
-                instructions.push({ 
-                    type: 'BIND', condition: mBindSimple[1], actionTrue: mBindSimple[2], actionFalse: null, line: lineNum 
-                });
+                instructions.push({ type: 'BIND', condition: mBindSimple[1], actionTrue: mBindSimple[2], actionFalse: null, line: lineNum });
                 continue;
             }
 
-            // DURING (WHILE)
+            // DURING
             let mDuring = line.match(/^DURING\s+(.+)$/);
             if (mDuring) {
                 instructions.push({ type: 'DURING', condition: mDuring[1], line: lineNum });
                 continue;
             }
 
-            // TOSERVE (FOR)
+            // TOSERVE
             let mToserve = line.match(/^TOSERVE\s+(.+)\s+UNTIL\s+(.+)\s+([A-Za-z_]\w*)\s+(GROWS|SHRINKS)$/);
             if (mToserve) {
                 let initRaw = mToserve[1];
@@ -88,14 +111,23 @@ export class Parser {
                     let parts = initRaw.split('=');
                     instructions.push({ type: 'GIVE', target: parts[0].trim(), expression: parts[1].trim(), line: lineNum });
                 }
-                instructions.push({ 
-                    type: 'TOSERVE', condition: mToserve[2], iteratorVar: mToserve[3], iteratorMode: mToserve[4], line: lineNum 
-                });
+                instructions.push({ type: 'TOSERVE', condition: mToserve[2], iteratorVar: mToserve[3], iteratorMode: mToserve[4], line: lineNum });
                 continue;
             }
 
-            throw new Error(`Línea ${lineNum}: Sintaxis no reconocida: "${line}"`);
+            // SI LLEGAMOS AQUÍ, LA LÍNEA NO SE RECONOCIÓ
+            errors.push(`Línea ${lineNum}: Error de Sintaxis - No entiendo: "${line}"`);
         }
-        return instructions;
+
+        // Validaciones Finales Globales
+        if (!hasEnding) errors.push("Error Fatal: Falta la instrucción 'ENDING' al final.");
+        if (openBlocks !== 0) errors.push(`Error de Estructura: Tienes ${Math.abs(openBlocks)} llave(s) { } sin cerrar/abrir correctamente.`);
+
+        // RETORNAMOS TODO (Instrucciones Y Errores)
+        return { 
+            instructions, 
+            errors,
+            success: errors.length === 0 
+        };
     }
 }
